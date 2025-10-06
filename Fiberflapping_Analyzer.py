@@ -22,7 +22,7 @@ class FiberflappingAnalyzer:
         analyzer.process()
     """
 
-    def __init__(self, df_optical: pd.DataFrame, df_fm: pd.DataFrame, threshold: float = 2.0, ref_path: str = "data/flapping.xlsx"):
+    def __init__(self, df_optical: pd.DataFrame, df_fm: pd.DataFrame, threshold: float = 2.0, ref_path: str = "data/Flapping.xlsx"):
         self.df_optical_raw = df_optical
         self.df_fm_raw = df_fm
         self.threshold = threshold
@@ -34,14 +34,33 @@ class FiberflappingAnalyzer:
 
     # -------------------- Load Reference --------------------
     def _load_reference(self) -> pd.DataFrame:
-        """โหลดไฟล์ reference สำหรับ site names"""
+        """โหลดไฟล์ reference สำหรับ site names (ลองทั้ง Flapping.xlsx และ flapping.xlsx)"""
+        primary_path = self.ref_path
         try:
-            df_ref = pd.read_excel(self.ref_path)
+            df_ref = pd.read_excel(primary_path)
             df_ref.columns = df_ref.columns.str.strip()
             return df_ref
-        except Exception as e:
-            st.warning(f"Could not load reference file {self.ref_path}: {e}")
-            return pd.DataFrame()
+        except Exception as e_primary:
+            # fallback: toggle filename case for compatibility
+            alt_path = None
+            if primary_path.endswith("Flapping.xlsx"):
+                alt_path = primary_path.replace("Flapping.xlsx", "flapping.xlsx")
+            elif primary_path.endswith("flapping.xlsx"):
+                alt_path = primary_path.replace("flapping.xlsx", "Flapping.xlsx")
+
+            if alt_path:
+                try:
+                    df_ref = pd.read_excel(alt_path)
+                    df_ref.columns = df_ref.columns.str.strip()
+                    # อัปเดต ref_path เป็นไฟล์ที่อ่านได้สำเร็จ
+                    self.ref_path = alt_path
+                    return df_ref
+                except Exception as e_alt:
+                    st.warning(f"Could not load reference file {primary_path} or fallback {alt_path}: {e_alt}")
+                    return pd.DataFrame()
+            else:
+                st.warning(f"Could not load reference file {primary_path}: {e_primary}")
+                return pd.DataFrame()
 
     # -------------------- Normalize / Prepare --------------------
     def normalize_optical(self) -> pd.DataFrame:

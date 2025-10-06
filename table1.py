@@ -151,7 +151,7 @@ class SummaryTableReport:
         _ensure_analyzer("msu", MSU_Analyzer, "data/MSU.xlsx", "msu_summary")
         _ensure_analyzer("line", Line_Analyzer, "data/Line.xlsx", "line_summary")
         _ensure_analyzer("client", Client_Analyzer, "data/Client.xlsx", "client_summary")
-        _ensure_analyzer("fiber", FiberflappingAnalyzer, "data/flapping.xlsx", "fiber_summary")
+        _ensure_analyzer("fiber", FiberflappingAnalyzer, "data/Flapping.xlsx", "fiber_summary")
         _ensure_analyzer("eol", EOLAnalyzer, "data/EOL.xlsx", "eol_summary")
         _ensure_analyzer("core", CoreAnalyzer, "data/EOL.xlsx", "core_summary")
    

@@ -7,6 +7,8 @@ import streamlit as st
 from streamlit_calendar import calendar
 import io, zipfile
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
 
 # ====== IMPORT ANALYZERS ======
 from CPU_Analyzer import CPU_Analyzer
@@ -564,7 +566,7 @@ elif menu == "Fiber Flapping":
                 df_optical=df_osc.copy(),
                 df_fm=df_fm.copy(),
                 threshold=2.0,   # คงเดิม
-                ref_path="data/flapping.xlsx"  # เพิ่ม reference file
+                ref_path="data/Flapping.xlsx"  # ใช้ชื่อไฟล์ตัวใหญ่ และมี fallback ภายใน
             )
             analyzer.process()
             st.caption(
@@ -650,6 +652,635 @@ elif menu == "Dashboard":
         with col3:
             reports = supabase.get_reports()
             st.metric("📋 Generated Reports", len(reports))
+
+        # ==============================
+        # CPU Section (SNP, NCPM, NCPQ)
+        # ==============================
+        st.markdown("---")
+        st.markdown("## CPU")
+
+        def render_cpu_status(title: str, row: pd.Series | None):
+            if row is None or row.empty:
+                st.markdown(f"#### {title}")
+                st.info("No data")
+                return
+
+            site = str(row.get("Site Name", "-"))
+            board = str(row.get("Measure Object", "-"))
+            cpu_pct = pd.to_numeric(row.get("CPU utilization ratio"), errors="coerce")
+            if pd.notna(cpu_pct) and cpu_pct <= 1:
+                cpu_pct = cpu_pct * 100.0
+
+            cpu_text = f"{cpu_pct:.2f}%" if pd.notna(cpu_pct) else "-"
+
+            # Threshold coloring
+            status = "normal"
+            color = "green"
+            label = "green Normal"
+            if pd.notna(cpu_pct) and cpu_pct > 90:
+                status = "red critical"
+                color = "red"
+                label = "red critical >= 90%"
+            elif pd.notna(cpu_pct) and cpu_pct >= 70:
+                status = "orange major"
+                color = "orange"
+                label = "Orenge Major >=70%"
+            elif pd.notna(cpu_pct) and cpu_pct >= 60:
+                status = "yellow minor"
+                color = "#d1a000"  # dark yellow
+                label = "yellow Minor >=60%"
+
+            # Header
+            st.markdown(f"#### {title}")
+
+            # Message: site name, board name, percentage (message text red if abnormal)
+            msg_color = "red" if status != "normal" else "green"
+            st.markdown(
+                f"<div style='font-weight:600;color:{msg_color};'>"
+                f"{site} — {board} — {cpu_text}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Legend line similar to screenshot
+            st.markdown(
+                f"<div style='color:{color};'>{label}</div>",
+                unsafe_allow_html=True,
+            )
+
+        def compute_max_cpu_per_type(df_merged: pd.DataFrame, pattern: str) -> pd.Series | None:
+            if df_merged.empty:
+                return None
+            df_type = df_merged[df_merged["Measure Object"].astype(str).str.contains(pattern, na=False)].copy()
+            if df_type.empty:
+                return None
+            # convert to percent if needed
+            val = pd.to_numeric(df_type["CPU utilization ratio"], errors="coerce")
+            if pd.notna(val.max()) and val.max() <= 1:
+                val = val * 100.0
+            df_type["CPU%"] = val
+            df_type = df_type.sort_values("CPU%", ascending=False)
+            return df_type.iloc[0] if not df_type.empty else None
+
+        # Build merged CPU (from session if available)
+        try:
+            if st.session_state.get("cpu_data") is not None:
+                cpu_df = st.session_state["cpu_data"].copy()
+                ref = pd.read_excel("data/CPU.xlsx")
+
+                # Normalize columns
+                cpu_df.columns = (
+                    cpu_df.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                )
+                ref.columns = (
+                    ref.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                )
+
+                # Merge
+                cpu_df["Mapping Format"] = (
+                    cpu_df["ME"].astype(str).str.strip() + cpu_df["Measure Object"].astype(str).str.strip()
+                )
+                ref["Mapping"] = ref["Mapping"].astype(str).str.strip()
+                merged = pd.merge(
+                    cpu_df,
+                    ref[["Mapping", "Maximum threshold", "Minimum threshold", "Site Name"]],
+                    left_on="Mapping Format",
+                    right_on="Mapping",
+                    how="inner",
+                )
+                merged = merged[[
+                    "Site Name", "ME", "Measure Object", "CPU utilization ratio", "Maximum threshold", "Minimum threshold"
+                ]].copy()
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    render_cpu_status("SNP", compute_max_cpu_per_type(merged, r"SNP\(E\)"))
+                with c2:
+                    render_cpu_status("NCPM", compute_max_cpu_per_type(merged, r"NCPM"))
+                with c3:
+                    render_cpu_status("NCPQ", compute_max_cpu_per_type(merged, r"NCPQ"))
+            else:
+                st.info("Upload CPU file and run analysis to populate CPU dashboard.")
+        except Exception as e:
+            st.warning(f"CPU dashboard could not be rendered: {e}")
+
+        # ==============================
+        # FAN Section (FCC, FCPL, FCPS, FCPP)
+        # ==============================
+        st.markdown("---")
+        st.markdown("## FAN")
+
+        def render_fan_gauge(title: str, row: pd.Series | None, threshold: float, vmax: float):
+            st.markdown(f"#### {title}")
+            if row is None or row.empty:
+                st.info("No data")
+                return
+
+            site = str(row.get("Site Name", "-"))
+            board = str(row.get("Measure Object", "-"))
+            rps = pd.to_numeric(row.get("Value of Fan Rotate Speed(Rps)"), errors="coerce")
+            value = float(rps) if pd.notna(rps) else 0.0
+
+            # Bands relative to threshold (green/yellow/orange/red)
+            g1 = 0.60 * threshold
+            g2 = 0.70 * threshold
+            g3 = 0.90 * threshold
+
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=value,
+                number={"suffix": " Rps", "font": {"color": "#000"}},
+                gauge={
+                    "axis": {"range": [0, vmax]},
+                    "bar": {"color": "#6b4cff"},
+                    "steps": [
+                        {"range": [0, g1],  "color": "#8fd19e"},   # green
+                        {"range": [g1, g2], "color": "#ffe08a"},   # yellow
+                        {"range": [g2, g3], "color": "#ffb74d"},   # orange
+                        {"range": [g3, vmax], "color": "#ff8a80"}, # red
+                    ],
+                    "threshold": {
+                        "line": {"color": "red", "width": 4},
+                        "thickness": 0.9,
+                        "value": threshold,
+                    },
+                },
+            ))
+
+            fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=220)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Text lines below gauge
+            msg_color = "red" if value > threshold else "green"
+            st.markdown(
+                f"<div style='color:{msg_color};font-weight:600'>{site} — {board}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div style='color:{'red' if value > threshold else 'green'};'>"
+                f"{'Abnormal > ' + str(int(threshold)) if value > threshold else 'green Normal'}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        def compute_max_fan_per_type(df_merged: pd.DataFrame, type_token: str) -> pd.Series | None:
+            if df_merged.empty:
+                return None
+            df_type = df_merged[df_merged["Measure Object"].astype(str).str.contains(type_token, na=False)].copy()
+            if df_type.empty:
+                return None
+            val = pd.to_numeric(df_type["Value of Fan Rotate Speed(Rps)"], errors="coerce")
+            df_type["RpsVal"] = val
+            df_type = df_type.sort_values("RpsVal", ascending=False)
+            return df_type.iloc[0] if not df_type.empty else None
+
+        try:
+            if st.session_state.get("fan_data") is not None:
+                fan_df = st.session_state["fan_data"].copy()
+                ref = pd.read_excel("data/FAN.xlsx")
+
+                # Normalize columns
+                fan_df.columns = (
+                    fan_df.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                )
+                ref.columns = (
+                    ref.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                )
+
+                # Merge with reference
+                fan_df["Mapping Format"] = (
+                    fan_df["ME"].astype(str).str.strip() + fan_df["Measure Object"].astype(str).str.strip()
+                )
+                ref["Mapping"] = ref["Mapping"].astype(str).str.strip()
+                merged = pd.merge(
+                    fan_df,
+                    ref[["Mapping", "Site Name", "Maximum threshold", "Minimum threshold"]],
+                    left_on="Mapping Format",
+                    right_on="Mapping",
+                    how="inner",
+                )
+                merged = merged[[
+                    "Site Name", "ME", "Measure Object", "Value of Fan Rotate Speed(Rps)",
+                    "Maximum threshold", "Minimum threshold"
+                ]].copy()
+
+                # Thresholds
+                thresholds = {"FCC": 120.0, "FCPL": 120.0, "FCPS": 230.0, "FCPP": 250.0}
+
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    render_fan_gauge(
+                        "FCC",
+                        compute_max_fan_per_type(merged, "FCC"),
+                        thresholds["FCC"],
+                        vmax= max(150.0, thresholds["FCC"] * 1.2),
+                    )
+                with c2:
+                    render_fan_gauge(
+                        "FCPL",
+                        compute_max_fan_per_type(merged, "FCPL"),
+                        thresholds["FCPL"],
+                        vmax= max(150.0, thresholds["FCPL"] * 1.2),
+                    )
+                with c3:
+                    render_fan_gauge(
+                        "FCPS",
+                        compute_max_fan_per_type(merged, "FCPS"),
+                        thresholds["FCPS"],
+                        vmax= max(280.0, thresholds["FCPS"] * 1.15),
+                    )
+                with c4:
+                    render_fan_gauge(
+                        "FCPP",
+                        compute_max_fan_per_type(merged, "FCPP"),
+                        thresholds["FCPP"],
+                        vmax= max(300.0, thresholds["FCPP"] * 1.15),
+                    )
+            else:
+                st.info("Upload FAN file and run analysis to populate FAN dashboard.")
+        except Exception as e:
+            st.warning(f"FAN dashboard could not be rendered: {e}")
+
+        # ==============================
+        # MSU Section
+        # ==============================
+        st.markdown("---")
+        st.markdown("## MSU")
+
+        try:
+            if st.session_state.get("msu_data") is not None:
+                msu_df = st.session_state["msu_data"].copy()
+                ref = pd.read_excel("data/MSU.xlsx")
+
+                # Normalize
+                for df_ in (msu_df, ref):
+                    df_.columns = (
+                        df_.columns.astype(str)
+                        .str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                    )
+
+                # Merge with reference for Site Name
+                msu_df["Mapping Format"] = (
+                    msu_df["ME"].astype(str).str.strip() + msu_df["Measure Object"].astype(str).str.strip()
+                )
+                ref["Mapping"] = ref["Mapping"].astype(str).str.strip()
+                merged = pd.merge(
+                    msu_df,
+                    ref[["Mapping", "Site Name"]],
+                    left_on="Mapping Format",
+                    right_on="Mapping",
+                    how="inner",
+                )
+
+                merged = merged[[
+                    "Site Name", "ME", "Measure Object", "Laser Bias Current(mA)"
+                ]].copy()
+
+                merged["Laser Bias Current(mA)"] = pd.to_numeric(
+                    merged["Laser Bias Current(mA)"], errors="coerce"
+                )
+
+                # Find maximum mA row
+                row_max = merged.sort_values("Laser Bias Current(mA)", ascending=False).iloc[0] if not merged.empty else None
+
+                c = st.columns(3)
+                with c[0]:
+                    st.markdown("#### MSU Max mA")
+                    if row_max is None:
+                        st.info("No data")
+                    else:
+                        site = str(row_max.get("Site Name", "-"))
+                        board = str(row_max.get("Measure Object", "-"))
+                        mA = float(row_max.get("Laser Bias Current(mA)", float("nan")))
+                        msg_color = "red" if pd.notna(mA) and mA > 1100 else "green"
+                        st.markdown(
+                            f"<div style='font-weight:600;color:{msg_color};'>{site} — {board} — {mA:.2f} mA</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("<div style='color:gray;'>Normal < 1100, Abnormal > 1100</div>", unsafe_allow_html=True)
+
+                # Counts
+                vals = pd.to_numeric(merged["Laser Bias Current(mA)"], errors="coerce")
+                abn_cnt = int((vals > 1100).sum())
+                ok_cnt = int((vals < 1100).sum())
+                total = int(vals.notna().sum())
+
+                with c[1]:
+                    st.metric("Normal", f"{ok_cnt}")
+                with c[2]:
+                    st.metric("Abnormal", f"{abn_cnt}", f"Total {total}")
+            else:
+                st.info("Upload MSU file and run analysis to populate MSU dashboard.")
+        except Exception as e:
+            st.warning(f"MSU dashboard could not be rendered: {e}")
+
+        # ==============================
+        # Line Section Summary
+        # ==============================
+        st.markdown("---")
+        st.markdown("## Line")
+        try:
+            if st.session_state.get("line_data") is not None:
+                df_line = st.session_state["line_data"].copy()
+                ref = pd.read_excel("data/Line.xlsx")
+
+                # Normalize
+                for df_ in (df_line, ref):
+                    df_.columns = (
+                        df_.columns.astype(str)
+                        .str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                    )
+
+                # Merge
+                df_line["Mapping Format"] = (
+                    df_line["ME"].astype(str).str.strip() + df_line["Measure Object"].astype(str).str.strip()
+                )
+                ref["Mapping"] = ref["Mapping"].astype(str).str.strip()
+                merged = pd.merge(
+                    df_line,
+                    ref[["Mapping", "Site Name", "Threshold",
+                         "Maximum threshold(out)", "Minimum threshold(out)",
+                         "Maximum threshold(in)",  "Minimum threshold(in)",
+                         "Route"]],
+                    left_on="Mapping Format",
+                    right_on="Mapping",
+                    how="inner",
+                )
+
+                # Cast
+                ber = pd.to_numeric(merged.get("Instant BER After FEC"), errors="coerce")
+                thr = pd.to_numeric(merged.get("Threshold"), errors="coerce")
+                vin = pd.to_numeric(merged.get("Input Optical Power(dBm)"), errors="coerce")
+                vout = pd.to_numeric(merged.get("Output Optical Power (dBm)"), errors="coerce")
+                min_in = pd.to_numeric(merged.get("Minimum threshold(in)"), errors="coerce")
+                max_in = pd.to_numeric(merged.get("Maximum threshold(in)"), errors="coerce")
+                min_out = pd.to_numeric(merged.get("Minimum threshold(out)"), errors="coerce")
+                max_out = pd.to_numeric(merged.get("Maximum threshold(out)"), errors="coerce")
+
+                total = int(len(merged))
+                ber_abn = int(((thr.notna()) & (ber.notna()) & (ber > thr)).sum())
+                in_abn = int(((vin.notna() & min_in.notna() & max_in.notna()) & ((vin < min_in) | (vin > max_in))).sum())
+                out_abn = int(((vout.notna() & min_out.notna() & max_out.notna()) & ((vout < min_out) | (vout > max_out))).sum())
+
+                c = st.columns(4)
+                c[0].metric("Total", f"{total}")
+                c[1].metric("BER Abnormal", f"{ber_abn}")
+                c[2].metric("Input Abnormal", f"{in_abn}")
+                c[3].metric("Output Abnormal", f"{out_abn}")
+
+                # Preset quick card
+                preset_mask = merged.get("Route", pd.Series([], dtype=object)).astype(str).str.startswith("Preset")
+                preset_total = int(preset_mask.sum())
+                preset_df = merged.loc[preset_mask].copy()
+                p_ber_abn = int(((pd.to_numeric(preset_df.get("Instant BER After FEC"), errors="coerce") > pd.to_numeric(preset_df.get("Threshold"), errors="coerce"))).sum())
+                p_in_abn = int(((pd.to_numeric(preset_df.get("Input Optical Power(dBm)"), errors="coerce") < pd.to_numeric(preset_df.get("Minimum threshold(in)"), errors="coerce")) |
+                                (pd.to_numeric(preset_df.get("Input Optical Power(dBm)"), errors="coerce") > pd.to_numeric(preset_df.get("Maximum threshold(in)"), errors="coerce"))).sum())
+                p_out_abn = int(((pd.to_numeric(preset_df.get("Output Optical Power (dBm)"), errors="coerce") < pd.to_numeric(preset_df.get("Minimum threshold(out)"), errors="coerce")) |
+                                 (pd.to_numeric(preset_df.get("Output Optical Power (dBm)"), errors="coerce") > pd.to_numeric(preset_df.get("Maximum threshold(out)"), errors="coerce"))).sum())
+
+                st.markdown("#### Preset")
+                pc = st.columns(4)
+                pc[0].metric("Preset Total", f"{preset_total}")
+                pc[1].metric("BER Abn (Preset)", f"{p_ber_abn}")
+                pc[2].metric("Input Abn (Preset)", f"{p_in_abn}")
+                pc[3].metric("Output Abn (Preset)", f"{p_out_abn}")
+
+                # Preset usage table with status label (OK/Abnormal) per Preset
+                if not preset_df.empty:
+                    preset_df = preset_df.copy()
+                    preset_df["PresetNo"] = preset_df["Route"].astype(str).str.extract(r"Preset\s*(\\d+)")
+                    # Determine abnormal for each row
+                    pber = pd.to_numeric(preset_df.get("Instant BER After FEC"), errors="coerce")
+                    pthr = pd.to_numeric(preset_df.get("Threshold"), errors="coerce")
+                    pinv = pd.to_numeric(preset_df.get("Input Optical Power(dBm)"), errors="coerce")
+                    pinL = pd.to_numeric(preset_df.get("Minimum threshold(in)"), errors="coerce")
+                    pinH = pd.to_numeric(preset_df.get("Maximum threshold(in)"), errors="coerce")
+                    pout = pd.to_numeric(preset_df.get("Output Optical Power (dBm)"), errors="coerce")
+                    poutL= pd.to_numeric(preset_df.get("Minimum threshold(out)"), errors="coerce")
+                    poutH= pd.to_numeric(preset_df.get("Maximum threshold(out)"), errors="coerce")
+
+                    row_abn = (
+                        (pber.notna() & pthr.notna() & (pber > pthr)) |
+                        (pinv.notna() & pinL.notna() & pinH.notna() & ((pinv < pinL) | (pinv > pinH))) |
+                        (pout.notna() & poutL.notna() & poutH.notna() & ((pout < poutL) | (pout > poutH)))
+                    )
+                    preset_df["RowAbn"] = row_abn
+
+                    preset_usage = (
+                        preset_df.groupby("PresetNo").agg(
+                            usage=("PresetNo", "count"),
+                            abn=("RowAbn", "any"),
+                        ).reset_index()
+                    )
+                    preset_usage["Status"] = preset_usage["abn"].map(lambda x: "Abnormal" if x else "Normal")
+                    preset_usage = preset_usage[["PresetNo", "usage", "Status"]]
+                    preset_usage = preset_usage.rename(columns={"PresetNo": "Preset", "usage": "Usage"})
+
+                    st.markdown("#### Preset Usage • Status")
+                    st.dataframe(preset_usage.reset_index(drop=True), use_container_width=True)
+            else:
+                st.info("Upload Line file and run analysis to populate Line dashboard.")
+        except Exception as e:
+            st.warning(f"Line dashboard could not be rendered: {e}")
+
+        # ==============================
+        # Client Section Summary
+        # ==============================
+        st.markdown("---")
+        st.markdown("## Client")
+        try:
+            if st.session_state.get("client_data") is not None:
+                df_client = st.session_state["client_data"].copy()
+                ref = pd.read_excel("data/Client.xlsx")
+
+                # Normalize
+                for df_ in (df_client, ref):
+                    df_.columns = (
+                        df_.columns.astype(str)
+                        .str.strip().str.replace(r"\s+", " ", regex=True).str.replace("\u00a0", " ")
+                    )
+
+                df_client["Mapping Format"] = (
+                    df_client["ME"].astype(str).str.strip() + df_client["Measure Object"].astype(str).str.strip()
+                )
+                ref["Mapping"] = ref["Mapping"].astype(str).str.strip()
+                merged = pd.merge(
+                    df_client,
+                    ref[[
+                        "Mapping", "Site Name",
+                        "Maximum threshold(out)", "Minimum threshold(out)",
+                        "Maximum threshold(in)",  "Minimum threshold(in)",
+                    ]],
+                    left_on="Mapping Format",
+                    right_on="Mapping",
+                    how="inner",
+                )
+
+                vin = pd.to_numeric(merged.get("Input Optical Power(dBm)"), errors="coerce")
+                vout = pd.to_numeric(merged.get("Output Optical Power (dBm)"), errors="coerce")
+                min_in = pd.to_numeric(merged.get("Minimum threshold(in)"), errors="coerce")
+                max_in = pd.to_numeric(merged.get("Maximum threshold(in)"), errors="coerce")
+                min_out = pd.to_numeric(merged.get("Minimum threshold(out)"), errors="coerce")
+                max_out = pd.to_numeric(merged.get("Maximum threshold(out)"), errors="coerce")
+
+                # Exclude invalid -60
+                mask_valid = (vin != -60) & (vout != -60)
+                vin = vin.where(mask_valid)
+                vout = vout.where(mask_valid)
+
+                total = int(len(merged))
+                in_abn = int(((vin.notna() & min_in.notna() & max_in.notna()) & ((vin < min_in) | (vin > max_in))).sum())
+                out_abn = int(((vout.notna() & min_out.notna() & max_out.notna()) & ((vout < min_out) | (vout > max_out))).sum())
+
+                c = st.columns(3)
+                c[0].metric("Total", f"{total}")
+                c[1].metric("Input Abnormal", f"{in_abn}")
+                c[2].metric("Output Abnormal", f"{out_abn}")
+            else:
+                st.info("Upload Client file and run analysis to populate Client dashboard.")
+        except Exception as e:
+            st.warning(f"Client dashboard could not be rendered: {e}")
+
+        # ==============================
+        # EOL / Core / APO – Circle Charts
+        # ==============================
+        st.markdown("---")
+        st.markdown("## EOL • Core • APO")
+
+        cols = st.columns(3)
+
+        # EOL Donut
+        try:
+            df_raw = st.session_state.get("atten_data")
+            if df_raw is not None:
+                eol = EOLAnalyzer(df_ref=None, df_raw_data=df_raw.copy(), ref_path="data/EOL.xlsx")
+                df_result = eol.build_result_df()
+                if not df_result.empty:
+                    vals = pd.to_numeric(df_result.get("Loss current - Loss EOL"), errors="coerce")
+                    remark = df_result.get("Remark").astype(str).fillna("")
+                    status = []
+                    for v, r in zip(vals, remark):
+                        if r.strip() != "":
+                            status.append("EOL Fiber Break")
+                        elif pd.notna(v) and v >= 2.5:
+                            status.append("EOL Excess Loss")
+                        else:
+                            status.append("EOL Normal")
+                    with cols[0]:
+                        fig = px.pie(pd.DataFrame({"Status": status}), names="Status", hole=0.5,
+                                     color="Status",
+                                     color_discrete_map={"EOL Normal": "green", "EOL Excess Loss": "red", "EOL Fiber Break": "gold"})
+                        fig.update_traces(textinfo="value+label")
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    with cols[0]:
+                        st.info("No EOL data")
+            else:
+                with cols[0]:
+                    st.info("No EOL data")
+        except Exception as e:
+            with cols[0]:
+                st.warning(f"EOL chart error: {e}")
+
+        # Core Donut
+        try:
+            df_raw = st.session_state.get("atten_data")
+            if df_raw is not None:
+                core = CoreAnalyzer(df_ref=None, df_raw_data=df_raw.copy(), ref_path="data/EOL.xlsx")
+                df_res = core.build_result_df()
+                if not df_res.empty:
+                    df_loss_between_core = core.calculate_loss_between_core(df_res)
+                    vals = df_loss_between_core["Loss between core"].tolist()
+                    status = []
+                    for v in vals:
+                        if v == "--":
+                            status.append("Core Fiber Break")
+                        elif pd.notna(v) and v > 3:
+                            try:
+                                status.append("Core Loss Excess" if float(v) > 3 else "Core Normal")
+                            except Exception:
+                                status.append("Core Normal")
+                        else:
+                            status.append("Core Normal")
+                    with cols[1]:
+                        fig = px.pie(pd.DataFrame({"Status": status}), names="Status", hole=0.5,
+                                     color="Status",
+                                     color_discrete_map={"Core Normal": "green", "Core Loss Excess": "red", "Core Fiber Break": "gold"})
+                        fig.update_traces(textinfo="value+label")
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    with cols[1]:
+                        st.info("No Core data")
+            else:
+                with cols[1]:
+                    st.info("No Core data")
+        except Exception as e:
+            with cols[1]:
+                st.warning(f"Core chart error: {e}")
+
+        # APO Donut
+        try:
+            wason = st.session_state.get("wason_log")
+            if wason:
+                apo = ApoRemnantAnalyzer(wason)
+                apo.parse(); apo.analyze()
+                rendered = apo.rendered
+                apo_sites = sum(1 for x in rendered if x[2])
+                noapo_sites = sum(1 for x in rendered if not x[2])
+                df_summary = pd.DataFrame({
+                    "Status": (["No APO Remnant"] * noapo_sites) + (["APO Remnant"] * apo_sites)
+                })
+                with cols[2]:
+                    fig = px.pie(df_summary, names="Status", hole=0.5,
+                                 color="Status",
+                                 color_discrete_map={"No APO Remnant": "green", "APO Remnant": "red"})
+                    fig.update_traces(textinfo="value+label")
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                with cols[2]:
+                    st.info("No APO log")
+        except Exception as e:
+            with cols[2]:
+                st.warning(f"APO chart error: {e}")
+
+        # ==============================
+        # Fiber Flapping — Daily Sites Bar
+        # ==============================
+        st.markdown("---")
+        st.markdown("## Fiber Flapping")
+        try:
+            df_osc = st.session_state.get("osc_data")
+            df_fm  = st.session_state.get("fm_data")
+            if (df_osc is not None) and (df_fm is not None):
+                # Build minimal pipeline to get unmatched flapping per day
+                analyzer_ff = FiberflappingAnalyzer(
+                    df_optical=df_osc.copy(),
+                    df_fm=df_fm.copy(),
+                    threshold=2.0,
+                    ref_path="data/Flapping.xlsx",
+                )
+                df_opt = analyzer_ff.normalize_optical()
+                df_fm_norm, link_col = analyzer_ff.normalize_fm()
+                df_filtered = analyzer_ff.filter_optical_by_threshold(df_opt)
+                df_nomatch = analyzer_ff.find_nomatch(df_filtered, df_fm_norm, link_col)
+
+                if df_nomatch.empty:
+                    st.success("No unmatched fiber flapping records.")
+                else:
+                    df_nomatch = df_nomatch.copy()
+                    df_nomatch["Date"] = pd.to_datetime(df_nomatch["Begin Time"]).dt.date
+                    daily_counts = (
+                        df_nomatch.groupby("Date")["ME"].nunique().reset_index().rename(columns={"ME": "Sites"})
+                    )
+                    fig = px.bar(daily_counts, x="Date", y="Sites", text="Sites",
+                                 title="No Fiber Break Alarm Match (Fiber Flapping)")
+                    fig.update_traces(textposition="outside")
+                    fig.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Upload ZIP that includes OSC and FM for Fiber Flapping dashboard.")
+        except Exception as e:
+            st.warning(f"Fiber Flapping chart error: {e}")
     else:
         st.error("❌ Cannot connect to Supabase Database")
         st.info("Please check your Supabase configuration in Streamlit secrets.")

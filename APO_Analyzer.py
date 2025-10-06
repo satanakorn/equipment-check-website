@@ -375,13 +375,13 @@ def apo_kpi(rendered: list[tuple]):
     fig.update_traces(textinfo="value+label")
     fig.add_annotation(
         dict(
-            text=f"Total<br>{total_sites}",
-            x=0.5, y=0.5,
-            font_size=18,
-            showarrow=False,
-            xanchor="center",
-            yanchor="middle",
-            font_color="black"
+        text=f"Total size<br>{total_sites}",
+        x=0.5, y=0.5,
+        font_size=18,
+        showarrow=False,
+        xanchor="center",
+        yanchor="middle",
+        font_color="black"
         )
     )
     st.plotly_chart(fig, use_container_width=True)
