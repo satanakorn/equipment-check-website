@@ -210,12 +210,12 @@ menu = st.sidebar.radio("เลือกกิจกรรม", [
 # ====== หน้าแรก (Calendar Upload + Run Analysis + Delete) ======
 if menu == "หน้าแรก":
     st.subheader("DWDM Monitoring Dashboard")
-    st.markdown("#### Upload & Manage ZIP Files (with Calendar)")
+    st.markdown("#### Upload & Manage Files (ZIP, Excel, TXT) with Calendar")
 
     chosen_date = st.date_input("Select date", value=date.today())
     files = st.file_uploader(
-        "Upload ZIP files",
-        type=["zip"],
+        "Upload files (ZIP / Excel / TXT)",
+        type=["zip", "xlsx", "xls", "xlsm", "txt"],
         accept_multiple_files=True,
         key=f"uploader_{chosen_date}"
     )
@@ -356,22 +356,38 @@ if menu == "หน้าแรก":
                     analysis_progress.progress(progress)
                     
                     try:
-                        with open(fpath, "rb") as f:
-                            zip_bytes = io.BytesIO(f.read())
-                            res = find_in_zip(zip_bytes)
-                        
-                        for kind, pack in res.items():
-                            if not pack:
-                                continue
-                            df, zname = pack
+                        lname = fpath.lower()
+                        if lname.endswith(".zip"):
+                            with open(fpath, "rb") as f:
+                                zip_bytes = io.BytesIO(f.read())
+                                res = find_in_zip(zip_bytes)
+                            # record results from zip
+                            for kind, pack in res.items():
+                                if not pack:
+                                    continue
+                                df, zname = pack
+                                if kind == "wason":
+                                    st.session_state["wason_log"] = df    # ✅ string log
+                                    st.session_state["wason_file"] = zname
+                                else:
+                                    st.session_state[f"{kind}_data"] = df # ✅ DataFrame
+                                    st.session_state[f"{kind}_file"] = zname
+                            processed_files += 1
+                        else:
+                            # Direct Excel/TXT file
+                            ext = _ext(lname)
+                            kind = _kind(lname)
+                            if not ext or not kind:
+                                raise ValueError("Unsupported file type or cannot infer kind")
+                            with open(fpath, "rb") as f:
+                                data = LOADERS[ext](f)
                             if kind == "wason":
-                                st.session_state["wason_log"] = df    # ✅ string log
-                                st.session_state["wason_file"] = zname
+                                st.session_state["wason_log"] = data
+                                st.session_state["wason_file"] = fname
                             else:
-                                st.session_state[f"{kind}_data"] = df # ✅ DataFrame
-                                st.session_state[f"{kind}_file"] = zname
-                        
-                        processed_files += 1
+                                st.session_state[f"{kind}_data"] = data
+                                st.session_state[f"{kind}_file"] = fname
+                            processed_files += 1
                         
                     except Exception as e:
                         st.error(f"❌ Failed to analyze {fname}: {e}")
