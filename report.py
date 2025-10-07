@@ -16,25 +16,70 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def _generate_executive_summary(all_abnormal: dict) -> str:
-    """สร้าง Executive Summary สำหรับรายงาน"""
-    total_issues = 0
-    critical_issues = 0
-    sections_with_issues = 0
-    
-    for section_name, abn_dict in all_abnormal.items():
-        if abn_dict:
-            sections_with_issues += 1
-            for subtype, df in abn_dict.items():
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    total_issues += len(df)
-                    # ถือว่าเป็น critical ถ้ามี abnormal
-                    critical_issues += len(df)
-    
-    if total_issues == 0:
-        return "✅ All network components are operating within normal parameters. No critical issues detected."
-    else:
-        return f"⚠️ Network inspection detected {total_issues} issues across {sections_with_issues} component types. {critical_issues} require immediate attention."
+def _df_to_wrapped_table(df: pd.DataFrame, style: ParagraphStyle) -> list[list]:
+    """Convert a DataFrame to a table data matrix using Paragraph cells to allow word wrapping."""
+    headers = [Paragraph(str(c), style) for c in df.columns]
+    rows = []
+    for _, r in df.iterrows():
+        row = [Paragraph(str(r[c]) if pd.notna(r[c]) else "", style) for c in df.columns]
+        rows.append(row)
+    return [headers] + rows
+
+def _colored(text: str, color: str, base_style: ParagraphStyle) -> Paragraph:
+    return Paragraph(f"<font color='{color}'>{text}</font>", base_style)
+
+def _has_abnormal(abn_dict: dict) -> bool:
+    if not abn_dict:
+        return False
+    for _sub, df in abn_dict.items():
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return True
+    return False
+
+def _build_summary_rows(all_abnormal: dict) -> list[tuple[str, str, str, str]]:
+    """Build summary rows: (Type, Task, Details, Result)."""
+    details_map = {
+        "CPU": "Threshold: Normal if ≤ 90%, Abnormal if > 90%",
+        "FAN": (
+            "FAN ratio performance\n"
+            "FCC: Normal if ≤ 120, Abnormal if > 120\n"
+            "FCPP: Normal if ≤ 250, Abnormal if > 250\n"
+            "FCPL: Normal if ≤ 120, Abnormal if > 120\n"
+            "FCPS: Normal if ≤ 230, Abnormal if > 230"
+        ),
+        "MSU": "Threshold: Should remain within normal range (not high)",
+        "Line": "Normal input/output power [xx–xx dB]",
+        "Client": "Normal input/output power [xx–xx dB]",
+        "Fiber": "Threshold: Normal if ≤ 2 dB, Abnormal if > 2 dB",
+        "EOL": "Threshold: Normal if ≤ 2.5 dB, Abnormal if > 2.5 dB",
+        "Core": "Threshold: Normal if ≤ 3 dB, Abnormal if > 3 dB",
+    }
+    task_map = {
+        "CPU": "Control board",
+        "FAN": "FAN board",
+        "MSU": "MSU board",
+        "Line": "Line board",
+        "Client": "Client board",
+        "Fiber": "Fiber Flapping",
+        "EOL": "Loss between EOL",
+        "Core": "Loss between core",
+    }
+    type_map = {
+        "CPU": "Performance",
+        "FAN": "Performance",
+        "MSU": "Performance",
+        "Line": "Performance",
+        "Client": "Performance",
+        "Fiber": "Performance",
+        "EOL": "Performance",
+        "Core": "Performance",
+    }
+
+    rows: list[tuple[str, str, str, str]] = []
+    for key in ["CPU", "FAN", "MSU", "Line", "Client", "Fiber", "EOL", "Core"]:
+        result = "Abnormal" if _has_abnormal(all_abnormal.get(key, {})) else "Normal"
+        rows.append((type_map[key], task_map[key], details_map[key], result))
+    return rows
 
 
 def generate_report(all_abnormal: dict, include_charts: bool = True):
@@ -76,16 +121,45 @@ def generate_report(all_abnormal: dict, include_charts: bool = True):
 
     # ===== Title & Date =====
     elements.append(Paragraph("🌐 3BB Network Inspection Report", title_center))
-    elements.append(
-        Paragraph(f"📅 Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_center)
-    )
-    elements.append(Spacer(1, 24))
-    
-    # ===== Executive Summary =====
-    elements.append(Paragraph("📊 Executive Summary", section_title_left))
-    summary_text = _generate_executive_summary(all_abnormal)
-    elements.append(Paragraph(summary_text, summary_style))
-    elements.append(Spacer(1, 24))
+    elements.append(Paragraph(f"📅 Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_center))
+    elements.append(Spacer(1, 18))
+
+    # ===== Summary Table (replace Executive Summary) =====
+    elements.append(Paragraph("Summary Table", section_title_left))
+
+    base_para = ParagraphStyle("Cell", parent=styles["Normal"], fontSize=9, leading=12)
+    base_para.alignment = 0  # left
+
+    summary_rows = _build_summary_rows(all_abnormal)
+    # Build DataFrame for consistent rendering
+    df_summary = pd.DataFrame(summary_rows, columns=["Type", "Task", "Details", "Results"])
+
+    # Convert Results to colored Paragraphs
+    table_data = [[Paragraph("Type", base_para), Paragraph("Task", base_para), Paragraph("Details", base_para), Paragraph("Results", base_para)]]
+    for _, r in df_summary.iterrows():
+        color = "#0F7B3E" if r["Results"] == "Normal" else "#B00020"
+        table_data.append([
+            Paragraph(str(r["Type"]), base_para),
+            Paragraph(str(r["Task"]), base_para),
+            Paragraph(str(r["Details"]), base_para),
+            _colored(str(r["Results"]), color, base_para),
+        ])
+
+    # Wider Details column to improve readability
+    summary_col_widths = [80, 110, 430, 80]
+    summary_tbl = Table(table_data, repeatRows=1, colWidths=summary_col_widths)
+    summary_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+    ]))
+    elements.append(summary_tbl)
+    elements.append(Spacer(1, 18))
 
     # ===== Sections (CPU มาก่อน FAN) =====
     section_order = ["CPU", "FAN", "MSU", "Line", "Client", "Fiber", "EOL", "Core"]
@@ -116,6 +190,12 @@ def generate_report(all_abnormal: dict, include_charts: bool = True):
         for subtype, df in abn_dict.items():
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
+
+            # Deduplicate Fiber Break tables: if EOL Fiber Break exists, skip Core Fiber Break table
+            if section_name == "Core" and subtype == "Core Fiber Break":
+                eol_break = all_abnormal.get("EOL", {}).get("EOL Fiber Break")
+                if isinstance(eol_break, pd.DataFrame) and not eol_break.empty:
+                    continue
 
             # Section Title
             elements.append(Paragraph(f"{subtype} – Abnormal Rows", section_title_left))
@@ -194,17 +274,20 @@ def generate_report(all_abnormal: dict, include_charts: bool = True):
                 elements.append(Spacer(1, 12))
                 continue
 
-            table_data = [list(df_show.columns)] + df_show.astype(str).values.tolist()
+            # Convert to wrapped Paragraph cells so long text breaks into new lines
+            table_data = _df_to_wrapped_table(df_show, ParagraphStyle("Tbl", parent=styles["Normal"], fontSize=8, leading=11))
             table = Table(table_data, repeatRows=1)
 
             style_cmds = [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("FONTSIZE", (0, 0), (-1, -1), 8),
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+                ("WORDWRAP", (0, 0), (-1, -1), True),
             ]
 
             # ===== Highlight logic =====

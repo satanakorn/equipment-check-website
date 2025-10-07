@@ -87,7 +87,7 @@ class LossAnalyzer:
                 <div style='display: flex; justify-content: center; align-items: center; gap: 8px'>
                     <div style='background-color: #ff4d4d; width: 24px; height: 24px; border-radius: 8px;'></div>
                     <div style='text-align: center; color: #ff4d4d; font-size: 24px; font-weight: bold;'>
-                        EOL not OK 
+                        Loss between EOL Warning 
                     </div>
                 </div>
                 <div style='display: flex; justify-content: center; align-items: center; gap: 8px'>
@@ -428,7 +428,7 @@ class CoreAnalyzer(EOLAnalyzer):
                     <div style='display: flex; justify-content: center; align-items: center; gap: 32px; margin: 1rem 0;'>
                         <div style='display: flex; align-items: center; gap: 8px'>
                             <div style='background-color: #ff4d4d; width: 24px; height: 24px; border-radius: 4px;'></div>
-                            <div style='color: #ff4d4d; font-size: 24px; font-weight: bold;'>Loss not OK </div>
+                            <div style='color: #ff4d4d; font-size: 24px; font-weight: bold;'>Loss between Core Warning</div>
                         </div>
                         <div style='display: flex; align-items: center; gap: 8px'>
                             <div style='background-color: #d6b346; width: 24px; height: 24px; border-radius: 4px;'></div>

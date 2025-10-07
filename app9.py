@@ -201,15 +201,15 @@ def safe_copy(obj):
     return obj
 
 # ====== SIDEBAR ======
-menu = st.sidebar.radio("เลือกกิจกรรม", [
-    "หน้าแรก","Dashboard","CPU","FAN","MSU","Line board","Client board",
+menu = st.sidebar.radio("Select Activity", [
+    "Home","Dashboard","CPU","FAN","MSU","Line board","Client board",
     "Fiber Flapping","Loss between Core","Loss between EOL","Preset status","APO Remnant","Summary table & report"
 ])
 
 
 # ====== หน้าแรก (Calendar Upload + Run Analysis + Delete) ======
-if menu == "หน้าแรก":
-    st.subheader("DWDM Monitoring Dashboard")
+if menu == "Home":
+    st.subheader("3BB Network Inspection Dashboard")
     st.markdown("#### Upload & Manage Files (ZIP, Excel, TXT) with Calendar")
 
     chosen_date = st.date_input("Select date", value=date.today())
@@ -545,7 +545,7 @@ elif menu == "Line board":
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
     else:
-        st.info("Please upload a ZIP on 'หน้าแรก' that contains a Line workbook")
+        st.info("Please upload a ZIP on 'Home' that contains a Line workbook")
 
 
 
@@ -567,7 +567,7 @@ elif menu == "Client board":
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
     else:
-        st.info("Please upload a ZIP on 'หน้าแรก' that contains a Client workbook")
+        st.info("Please upload a ZIP on 'Home' that contains a Client workbook")
 
 
 elif menu == "Fiber Flapping":
@@ -592,7 +592,7 @@ elif menu == "Fiber Flapping":
         except Exception as e:
             st.error(f"An error occurred: {e}")
     else:
-        st.info("Please upload a ZIP on 'หน้าแรก' that contains both OSC (optical) and FM workbooks.")
+        st.info("Please upload a ZIP on 'Home' that contains both OSC (optical) and FM workbooks.")
 
 
 
@@ -648,32 +648,28 @@ elif menu == "Dashboard":
         st.info("📊 Dashboard Overview")
         st.markdown("""
         ### 🚀 Getting Started
-        1. Go to **หน้าแรก** to upload your ZIP files
+        1. Go to **Home** to upload your ZIP files
         2. Select files and click **Run Analysis**
         3. Navigate to individual analysis pages (CPU, FAN, etc.)
         4. Check **Summary table & report** for comprehensive results
         """)
         
-        # Show basic stats
-        st.markdown("### 📈 Current Status")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("📁 Total Files", len(supabase.get_dates_with_files()))
-        
-        with col2:
-            analysis_results = supabase.get_analysis_results()
-            st.metric("📊 Analysis Results", len(analysis_results))
-        
-        with col3:
-            reports = supabase.get_reports()
-            st.metric("📋 Generated Reports", len(reports))
+       
 
         # ==============================
         # CPU Section (SNP, NCPM, NCPQ)
         # ==============================
         st.markdown("---")
-        st.markdown("## CPU")
+        st.markdown("## CPU (Max CPU %)")
+        st.markdown(
+            "<div style='font-size:20px; margin-top:-6px; margin-bottom:8px'>"
+            "<span style='color:red;font-weight:600'>Critical ≥ 90%</span> • "
+            "<span style='color:orange;font-weight:600'>Major ≥ 70%</span> • "
+            "<span style='color:#d1a000;font-weight:600'>Minor ≥ 60%</span> • "
+            "<span style='color:green;font-weight:600'>Other Normal</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
         def render_cpu_status(title: str, row: pd.Series | None):
             if row is None or row.empty:
@@ -692,7 +688,7 @@ elif menu == "Dashboard":
             # Threshold coloring
             status = "normal"
             color = "green"
-            label = "green Normal"
+            label = "Normal"
             if pd.notna(cpu_pct) and cpu_pct > 90:
                 status = "red critical"
                 color = "red"
@@ -784,7 +780,16 @@ elif menu == "Dashboard":
         # FAN Section (FCC, FCPL, FCPS, FCPP)
         # ==============================
         st.markdown("---")
-        st.markdown("## FAN")
+        st.markdown("## FAN (Max Fan Speed (Rps))")
+        st.markdown(
+            "<div style='font-size:20px; margin-top:-6px; margin-bottom:8px'>"
+            "<span style='color:red;font-weight:600'>abnormal > 120</span> • "
+            "<span style='color:red;font-weight:600'>abnormal > 120</span> • "
+            "<span style='color:red;font-weight:600'>abnormal > 230</span> • "
+            "<span style='color:red;font-weight:600'>abnormal > 250</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
         def render_fan_gauge(title: str, row: pd.Series | None, threshold: float, vmax: float):
             st.markdown(f"#### {title}")
@@ -834,7 +839,7 @@ elif menu == "Dashboard":
             )
             st.markdown(
                 f"<div style='color:{'red' if value > threshold else 'green'};'>"
-                f"{'Abnormal > ' + str(int(threshold)) if value > threshold else 'green Normal'}"
+                f"{'Abnormal > ' + str(int(threshold)) if value > threshold else 'Normal'}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
